@@ -1,0 +1,317 @@
+//========== * Общие пользовательские настройки стратегии * ===//   
+var Deposit = 5.0;	// Размер депозита, который даем боту для торговли
+var ProfitSize = 0.6;	// Работает. уровень профина. надо закладывать все комиссии в процентах!!!
+var OrdersAmnt = 5;	// Максимальное количество ордеров на покупку. Шаг между ордерами будет расчитан как ширина коридора деленная на этот параметр.
+var PercMaxPrice = 1;	// Верхний уровень ценового коридора относительно текущей цены (для режима 1) или суточного максимума (для режима 2) в %.
+var PercMinPrice = 1;	// Нижний уровень ценового коридора относительно текущей цены (для режима 1) или суточного максимума (для режима 2) в %.
+var MinVolume = 0.01;	// Минимальный объем крипты для сделок. Пока не используется
+var vh = 0.003;		// Шаг по цене, если 0, то считается сам исходя из параметров выше
+//========== * Настрйоки сетки ордеров * ================//	
+var Symbol = "BTCUSD";	// требуется для определения ордеров только для этой валюты; Пока не нужный параметр
+var Spreading = 10;	// Пока не работает. Распределение профита в фиатную или криптовалютную части депо в %	
+var Trading = 'long';	// Пока не работает. Вид торгов. long - на повышение цены, short - на понижение цены, mix - смешаный режим
+
+var DeltaStepOrder = 0.0;	//Пока не работает Увеличение размера шага ордеров при приближении к основанию сетки в %
+var OrderMode = 1;	// Режим автонастройки ордеров. 0 - вручную, 1 - по времени от текущей цены, 2 - по max/min суточной цене. Пока работает только 1
+var ManualMax = 40;	// Максимальная цена для ручного режима
+var ManualMin = 25;	// Минимальнач цена для ручного режима
+var WaitRebuild = 30;	// Пока не работает Время про стоя бота без торгов в минутах, после которого будет пересчитана сетка
+var StopLoss = 0;	// Пока не работает Если курс будет ниже на эту величину чем цена закупки в партии партия будет слита в минус. Установить равным 0 чтобы не использовать слив в минус.
+var СurrentAskPrice = 0; 	// Пока не работает. Всегда 0. Нужна для запоминания и возобновления работы!!! Если 0 - вычисляется текущая, иначе остается та, которая указана.
+var СurrentBidPrice = 0; 	// Пока не работает. Всегда 0. Нужна для запоминания и возобновления работы!!! Если 0 - вычисляется текущая, иначе остается та, которая указана.
+
+//=========== * Дальше только для служебного использования * =//
+var sVer = '1.2';
+var SetOrderDelay = 5; // Пока не работает. Количество секунд между установкой ордеров
+var WaitToSetOrder = 1;
+
+var vfee = trader.get("Fee");
+
+//=========== * Непонятные переменные * ===============//
+var botSafeLim2 = 0;
+//=========== * Открытые ордера для данного скрипта* =====//
+var mOpenOrders = []; 
+var mOpenOrders2 = []; 
+var mOpenOrders_todel = []; 
+
+//=========== * Ордера для данного скрипта которые открывать не надо* =====//
+var mNotOpenOrders = []; 
+var mOpenSellOrders = []; 
+
+var mNotOpenOrders_todel = []; 
+
+//=========== * Выполненные ордера для данного скрипта* =====//
+var mFilledOrders = []; 
+
+var indexDelete = [];
+
+//============ Пример элемента массива ордеров ======//
+var oneOrder = {
+	type : 0, // 0 - Покупка,  - продажа
+	price : 0,
+	volume : 0
+}
+
+function newOrder (vtype, vprice, vvolume) {
+this.type = vtype;
+this.price = vprice;
+this.volume = vvolume;
+}
+
+var SetLastOrder = new Date();
+var SetLastOrder2 = new Date();
+var MaxPrice = 0;
+var MinPrice = 0;
+var BuyPart = 0;
+var BuySize = 0;
+
+function MinutesBetween(date1,date2) {
+    return  Math.round((((date1 - date2) % 86400000) % 3600000) / 60000);
+}
+
+function SecondsBetween(date1,date2) {
+    return  Math.round(((((date1 - date2) % 86400000) % 3600000) % 60000) / 1000);
+}
+
+
+function checkOpenOrder(type, price, volume) {
+	for (var i = 0; i < trader.get("OpenOrdersCount"); i++) {
+		if ((trader.get("OpenOrderType",i) == type)&&(trader.get("OpenOrderPrice",i) == price)&&(trader.get("OpenOrderVolume",i) == volume)) {
+			return true;
+		}
+	}
+return false;
+}
+
+function print_mOpenOrders () {
+trader.log("============ Стек открытых ордеров скрипта mOpenOrders ============");
+for (var i = 0; i < mOpenOrders.length; i++) {
+	trader.log("   ",i,") ", mOpenOrders[i].price, mOpenOrders[i].volume);
+}
+}
+
+function print_mNotOpenOrders () {
+trader.log("============ Стек ордеров скрипта mNotOpenOrders которые не надо открывать ============");
+for (var i = 0; i < mNotOpenOrders.length; i++) {
+	trader.log("   ",i,") ", mNotOpenOrders[i].price, mNotOpenOrders[i].volume);
+}
+}
+
+function print_mOpenSellOrders () {
+trader.log("============ Стек ордеров скрипта mOpenSellOrders ============");
+for (var i = 0; i < mOpenSellOrders.length; i++) {
+	trader.log("   ",i,") ", mOpenSellOrders[i].price, mOpenSellOrders[i].volume);
+}
+}
+
+function includes_mNotOpenOrders (item) {
+var result = false;
+for (var i = 0; i < mNotOpenOrders.length; i++) {
+	if ((mNotOpenOrders[i].type == item.type)&&(mNotOpenOrders[i].price.toFixed(5) == item.price.toFixed(5))&&(mNotOpenOrders[i].volume.toFixed(5) == item.volume.toFixed(5))) {
+		result = true;
+		break;
+	}
+}
+return result;
+}
+
+var asc = function (field) { // функция для сортировки в прямом порядке (по возрастанию)
+ return function (x, y) {
+   return x[field] > y[field];
+ }
+};
+
+var desc = function (field) { // функция для сортировки в обратном порядке (по убыванию)
+ return function (x, y) {
+   return x[field] < y[field];
+ }
+};
+
+
+function DataInitialize() {
+  trader.log('DataInitialize');
+  SetLastOrder = new Date();
+  SetLastOrder2 = new Date();
+  
+  if (СurrentAskPrice == 0) {
+  	СurrentAskPrice = trader.get("AskPrice");
+	СurrentAskPrice = (СurrentAskPrice.toFixed(3))/1 - 0.001;
+  }
+  if (СurrentBidPrice == 0) {
+  	СurrentBidPrice  = trader.get("BidPrice");
+  }
+  switch (OrderMode) {
+  case 0: 
+	MaxPrice = ManualMax;
+	MinPrice = ManualMin;
+	break;
+  case 1:
+	MaxPrice = СurrentAskPrice*(1+PercMaxPrice/100);
+	MinPrice =  СurrentBidPrice/(1+PercMinPrice/100);
+	break;
+  case 2:
+	MaxPrice = trader.get("HighPrice")*(1+PercMaxPrice/100);
+	MinPrice = trader.get("LowPrice")/(1+PercMinPrice/100);
+	break;
+  }
+
+  trader.log("СurrentAskPrice = ",СurrentAskPrice);
+  trader.log("СurrentBidPrice = ",СurrentBidPrice);
+  trader.log("MaxPrice = ",MaxPrice);
+  trader.log("MinPrice = ",MinPrice);
+
+  mOpenOrders.length = 0; 
+  mNotOpenOrders.length = 0; 
+  print_mOpenOrders();
+  print_mNotOpenOrders();  
+  
+  mNotOpenOrders.push(new newOrder(0,1.11111,2.222222));
+  var last = mNotOpenOrders.pop();
+  print_mNotOpenOrders();
+
+}
+
+
+
+BuyPart = 100/OrdersAmnt;
+BuySize = Deposit*BuyPart/100; // ордера всегда покупаются на данную велечину.
+	
+DataInitialize();
+
+if (vh == 0) {
+	vh = (СurrentAskPrice -  MinPrice)/OrdersAmnt;
+}
+var sellcount = 0;
+
+trader.log("vh (шаг) = ", vh);
+
+for (var i = 1; i < OrdersAmnt+1; i++) {
+	var vprice = СurrentAskPrice-vh*i;
+	if (!checkOpenOrder(0, vprice, BuySize/vprice)) {
+		trader.buy(BuySize/vprice,vprice);
+	}
+	mOpenOrders.push(new newOrder(0,vprice,BuySize/vprice)); // Добавление в конец массива
+}
+
+print_mOpenOrders();
+print_mNotOpenOrders();
+
+
+
+trader.on("Time").changed()
+{
+var vNotFind = false;
+if (SecondsBetween(new Date(),SetLastOrder) > 5) {
+SetLastOrder = new Date();
+var vprice = mOpenOrders[0].price + vh;
+if (trader.get("AskPrice") >= mOpenOrders[0].price + 1.1*vh) { 
+	if (! includes_mNotOpenOrders (new newOrder(0,vprice,BuySize/vprice))) {
+		trader.log("Цена покупки больше чем макс цена ордера + 1.1 шага");
+		trader.log("Цена покупки = ", trader.get("AskPrice"));
+		trader.log("mOpenOrders[0].price = ", mOpenOrders[0].price);
+	
+		trader.cancelBid(mOpenOrders[mOpenOrders.length-1].volume.toFixed(8),mOpenOrders[mOpenOrders.length-1].price.toFixed(8));
+		trader.log("CancelBid price = ",mOpenOrders[mOpenOrders.length-1].price.toFixed(8), " volume = ", mOpenOrders[mOpenOrders.length-1].volume.toFixed(8));
+		var last = mOpenOrders.pop(); // Исключили последний элемент массива	
+
+		trader.buy(BuySize/vprice,vprice);
+		mOpenOrders.unshift(new newOrder(0,vprice,BuySize/vprice)); // в начало массива
+		print_mOpenOrders();	
+	}
+}
+}
+if (SecondsBetween(new Date(),SetLastOrder2) > 7) {
+vNotFind = false;
+SetLastOrder2 = new Date();
+for (var i = 0; i < mOpenOrders.length; i++) {
+		var vFind = false;
+		for (var j = 0; j < trader.get("OpenOrdersCount") ; j++) {
+if (mOpenOrders[i].type == 0 && trader.get("OpenOrderType",j) == 0 && mOpenOrders[i].price.toFixed(5) == trader.get("OpenOrderPrice",j).toFixed(5) && mOpenOrders[i].volume.toFixed(5) == trader.get("OpenOrderVolume",j).toFixed(5)) {
+				// Нашли!!!
+				vFind = true;
+				//trader.log("FIND!!!");
+				break;
+			}
+		}
+
+		if (!vFind) { // Не нашли :(
+			// Произошла покупка!!!  - Переписать!!! если покупка произошла нескольких ордеров, то не срабатывает много раз!!! срабатывает 1 раз!!!			
+			var lprice = (1 + (ProfitSize-vfee)*0.01)*mOpenOrders[i].price;
+			var lvolume = (1 - 0.01*vfee)*mOpenOrders[i].volume - 0.00000001;
+			trader.sell(lvolume,lprice);
+			mOpenSellOrders.push(new newOrder(1,lprice,lvolume));
+			mNotOpenOrders.push(new newOrder(0,mOpenOrders[i].price,mOpenOrders[i].volume)); // в конец массива
+			print_mNotOpenOrders();
+			print_mOpenSellOrders();
+
+			trader.log("Цена продажи = ", ((1 + ProfitSize*0.01)*mOpenOrders[i].price));
+			
+			mOpenOrders_todel.push(i);
+			
+			var vprice = mOpenOrders[mOpenOrders.length-1].price - vh;
+			trader.buy(BuySize/vprice,vprice);
+			// добавляем во второй массив
+			mOpenOrders2.push(new newOrder(0,vprice,BuySize/vprice)); // в конец массива
+			print_mOpenOrders();
+			vNotFind = true;
+		}
+		
+	}
+	
+	if (vNotFind) {
+		for (var i = 0; i < mOpenOrders_todel.length; i++) {
+			mOpenOrders.splice(mOpenOrders_todel[i],1);		
+		} 
+		mOpenOrders_todel.length = 0;
+		
+		for (var i = 0; i < mOpenOrders2.length; i++) {
+			mOpenOrders.push(new newOrder(0,mOpenOrders2[i].price,mOpenOrders2[i].volume)); // в конец массива		
+		}
+		mOpenOrders2.length = 0;
+		// возможно нужна сортировка :)
+		mOpenOrders.sort(desc('price'));
+	}
+	
+vNotFind = false;
+// Произошла продажа!!! Надо убрать элемент из массива mNotOpenOrders
+for (var i = 0; i < mOpenSellOrders.length; i++) {
+		var vFind = false;
+		for (var j = 0; j < trader.get("OpenOrdersCount") ; j++) {
+			trader.log(mOpenSellOrders[i].type," = ", trader.get("OpenOrderType",j));
+			var v_oop = trader.get("OpenOrderPrice",j);
+			trader.log(mOpenSellOrders[i].price.toFixed(5)," = ", v_oop);
+			var v_oov = trader.get("OpenOrderVolume",j);
+			trader.log(mOpenSellOrders[i].volume.toFixed(5)," = ", v_oov);
+if (mOpenSellOrders[i].type == 1 && trader.get("OpenOrderType",j) == 1 && mOpenSellOrders[i].price.toFixed(5) == trader.get("OpenOrderPrice",j).toFixed(5) && mOpenSellOrders[i].volume.toFixed(5) == trader.get("OpenOrderVolume",j).toFixed(5)) {
+				// Нашли!!!
+				vFind = true;
+				trader.log("FIND!!!");
+				break;
+			}
+		}
+
+		if (!vFind) { // Нашли :)
+			mNotOpenOrders_todel.push(i);
+			vNotFind = true;
+			/*var last = mNotOpenOrders.pop(); // Исключили последний элемент массива	лучше бы исключить i элемент
+			print_mNotOpenOrders();
+			var last = mOpenSellOrders.pop(); // Исключили последний элемент массива	лучше бы исключить i элемент
+			print_mOpenSellOrders();*/
+		}
+	}
+	
+	if (vNotFind) {
+		for (var i = 0; i < mNotOpenOrders_todel.length; i++) {
+			mNotOpenOrders.splice(mNotOpenOrders_todel[i],1);
+			mOpenSellOrders.splice(mNotOpenOrders_todel[i],1);
+		} 
+		mNotOpenOrders_todel.length = 0;
+		
+		mNotOpenOrders.sort(desc('price'));
+		mOpenSellOrders.sort(desc('price'));
+		
+		print_mNotOpenOrders();
+		print_mOpenSellOrders();
+	}
+}
+}
